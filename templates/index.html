@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PDF to Image Converter</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link href="https://cdn.jsdelivr.net/npm/remixicon/fonts/remixicon.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+</head>
+<body>
+<div class="app-container">
+<header>
+<h1><i class="ri-file-copy-2-line"></i> PDF to PNG/JPG Converter</h1>
+</header>
+<main>
+    <div class="upload-box" id="upload-box">
+        <i class="ri-upload-2-line"></i>
+        <p>Drag & Drop PDF here or click to upload</p>
+        <input type="file" id="pdf_file" multiple accept=".pdf">
+    </div>
+
+    <div id="file-preview" class="preview-container"></div>
+
+    <div class="quality-selection">
+        <div class="quality-box selected" data-quality="Normal">Normal</div>
+        <div class="quality-box" data-quality="High">High</div>
+    </div>
+
+    <div class="format-selection">
+        <div class="quality-box selected" data-format="PNG">PNG</div>
+        <div class="quality-box" data-format="JPG">JPG</div>
+    </div>
+
+    <button id="convert-btn" class="convert-btn"><i class="ri-arrow-right-line"></i> Convert</button>
+
+    <!-- Zoom Preview Modal -->
+    <div id="zoom-modal" class="zoom-modal">
+        <span class="close-modal">&times;</span>
+        <button class="carousel-btn prev"><i class="ri-arrow-left-s-line"></i></button>
+        <img id="zoom-img" src="">
+        <button class="carousel-btn next"><i class="ri-arrow-right-s-line"></i></button>
+    </div>
+</main>
+</div>
+
+<script>
+let uploadedFiles = [];
+let zoomCurrent = {file:0,page:0};
+let currentCarouselPages = [];
+let currentCarouselFileId = null;
+
+const qualityBoxes = document.querySelectorAll(".quality-selection .quality-box");
+const formatBoxes = document.querySelectorAll(".format-selection .quality-box");
+let selectedQuality = "Normal";
+let selectedFormat = "PNG";
+
+qualityBoxes.forEach(b => b.addEventListener("click", ()=>{
+    qualityBoxes.forEach(bb=>bb.classList.remove("selected"));
+    b.classList.add("selected");
+    selectedQuality = b.dataset.quality;
+}));
+formatBoxes.forEach(b => b.addEventListener("click", ()=>{
+    formatBoxes.forEach(bb=>bb.classList.remove("selected"));
+    b.classList.add("selected");
+    selectedFormat = b.dataset.format;
+}));
+
+const uploadBox = document.getElementById("upload-box");
+const fileInput = document.getElementById("pdf_file");
+const previewDiv = document.getElementById("file-preview");
+
+uploadBox.addEventListener("click", ()=>fileInput.click());
+uploadBox.addEventListener("dragover", e=>e.preventDefault());
+uploadBox.addEventListener("drop", e=>{
+    e.preventDefault();
+    fileInput.files = e.dataTransfer.files;
+    uploadFiles();
+});
+fileInput.addEventListener("change", uploadFiles);
+
+function uploadFiles(){
+    const formData = new FormData();
+    for(const f of fileInput.files) formData.append("pdf_files[]", f);
+    fetch("/upload", {method:"POST", body:formData})
+    .then(r=>r.json())
+    .then(data=>{
+        uploadedFiles = uploadedFiles.concat(data.map(f=>({...f, selectedPages: Array.from({length:f.pages}, (_,i)=>i)})));
+        renderPreview();
+    });
+}
+
+function renderPreview(){
+    previewDiv.innerHTML = "";
+    uploadedFiles.forEach((f, fIndex)=>{
+        const fileCard = document.createElement("div");
+        fileCard.className = "file-card";
+        fileCard.dataset.id = f.id;
+        fileCard.innerHTML = `<i class="ri-file-3-line"></i>
+            <span class="file-name">${f.name}</span>
+            <div class="file-actions">
+                <button class="preview-file" title="Preview"><i class="ri-eye-line"></i></button>
+                <button class="delete-file" data-id="${f.id}" title="Delete"><i class="ri-delete-bin-line"></i></button>
+            </div>`;
+
+        previewDiv.appendChild(fileCard);
+
+        // Delete button
+        fileCard.querySelector(".delete-file").addEventListener("click", ()=>{
+            fetch("/delete_file", {
+                method:"POST",
+                headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({id:f.id})
+            }).then(r=>r.json()).then(res=>{
+                uploadedFiles = uploadedFiles.filter(ff=>ff.id!==f.id);
+                renderPreview();
+            });
+        });
+
+        // Preview button
+        fileCard.querySelector(".preview-file").addEventListener("click", ()=>{
+            zoomCurrent.file = fIndex;
+            zoomCurrent.page = 0;
+            currentCarouselPages = f.selectedPages.length>0 ? f.selectedPages : [...Array(f.pages).keys()];
+            currentCarouselFileId = f.id;
+            document.getElementById("zoom-img").src = `/thumbnail/${f.id}/${currentCarouselPages[0]}`;
+            document.getElementById("zoom-modal").style.display = "flex";
+        });
+    });
+}
+
+// Zoom modal
+const modal = document.getElementById("zoom-modal");
+modal.querySelector(".close-modal").onclick = ()=> modal.style.display="none";
+modal.querySelector(".prev").onclick = ()=>{
+    let idx = currentCarouselPages.indexOf(zoomCurrent.page);
+    idx = (idx-1+currentCarouselPages.length)%currentCarouselPages.length;
+    zoomCurrent.page = currentCarouselPages[idx];
+    document.getElementById("zoom-img").src = `/thumbnail/${currentCarouselFileId}/${zoomCurrent.page}`;
+};
+modal.querySelector(".next").onclick = ()=>{
+    let idx = currentCarouselPages.indexOf(zoomCurrent.page);
+    idx = (idx+1)%currentCarouselPages.length;
+    zoomCurrent.page = currentCarouselPages[idx];
+    document.getElementById("zoom-img").src = `/thumbnail/${currentCarouselFileId}/${zoomCurrent.page}`;
+};
+
+// Convert
+document.getElementById("convert-btn").addEventListener("click", ()=>{
+    if(uploadedFiles.length===0){
+        alert("กรุณาอัปโหลดไฟล์ PDF ก่อน!");
+        return;
+    }
+    let hasPages = uploadedFiles.some(f=>f.selectedPages.length>0);
+    if(!hasPages){
+        alert("กรุณาเลือกอย่างน้อย 1 หน้าเพื่อแปลง!");
+        return;
+    }
+    const filesData = uploadedFiles.map(f=>({id:f.id, pages:f.selectedPages}));
+    fetch("/convert",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({files:filesData, quality:selectedQuality, format:selectedFormat})
+    }).then(r=>r.json()).then(data=>{
+        if(data.single_image){
+            window.open(data.single_image,"_blank");
+        } else if(data.zip_url){
+            window.open(data.zip_url,"_blank");
+        }
+        uploadedFiles = [];
+        previewDiv.innerHTML = "";
+        fileInput.value = "";
+    });
+});
+</script>
+</body>
+</html>
